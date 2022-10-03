@@ -7,7 +7,7 @@ os.environ.setdefault("DJANGO_SETTINGS_MODULE", "discord_acmicpc_bot.settings")
 import django
 
 django.setup()
-from acmicpc.models import Member
+from acmicpc.models import Member, Submit
 
 import requests
 from bs4 import BeautifulSoup as bs
@@ -33,9 +33,30 @@ async def worker1():
 
 @tasks.loop(seconds=1)
 async def worker2():
-    print('worker2')
     channel = bot.get_channel(int(os.environ['DISCORD_CHANNEL_ID']))
-    # await channel.send('test')
+
+    members = await sync_to_async(list)(Member.objects.all())
+    members = list(map(lambda x: x.user_id, members))
+
+    res = requests.get('https://www.acmicpc.net/status')
+    if res.status_code == 200:
+        html = res.text
+        parser = bs(html, 'html.parser')
+        rows = parser.select('#status-table > tbody > tr')
+        for row in rows:
+            user_id = row.select_one('td:nth-child(2)').text
+            if user_id in members:
+                submit_id = row.select_one('td:nth-child(1)').text
+
+                try:
+                    await sync_to_async(Submit.objects.get)(pk=submit_id)
+                except Submit.DoesNotExist:
+                    submit = Submit(submit_id,
+                                    result=row.select_one('td:nth-child(4)').text,
+                                    problem_id=row.select_one('td:nth-child(3)').text,
+                                    user_id=row.select_one('td:nth-child(2)').text)
+                    await sync_to_async(submit.save, thread_sensitive=True)()
+                    await channel.send(f'**{submit.user_id}**님이 **{submit.problem_id}**번 문제를 제출했습니다.\n<https://www.acmicpc.net/problem/{submit.problem_id}>')
 
 
 @bot.command(name='활성화')
